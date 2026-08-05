@@ -7,7 +7,8 @@ One-time registration for both providers. Budget about 15 minutes.
 ## 1. Local setup
 
 ```bash
-git clone <this repo> && cd Running-Playlist-Generator
+git clone https://github.com/kyrad2004/Running-Playlist-Generator.git
+cd Running-Playlist-Generator
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env

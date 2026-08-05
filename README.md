@@ -11,6 +11,9 @@ is built and tested; the plan logic engine is not written yet.
 ## Quick start
 
 ```bash
+git clone https://github.com/kyrad2004/Running-Playlist-Generator.git
+cd Running-Playlist-Generator
+
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env          # then fill in — see docs/API_SETUP.md
