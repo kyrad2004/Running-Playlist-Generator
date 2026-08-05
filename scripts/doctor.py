@@ -33,6 +33,20 @@ def check_dependencies() -> bool:
     return all_ok
 
 
+def check_env_file() -> None:
+    """Inspect .env itself before blaming the credentials in it."""
+    from rpg.config import REPO_ROOT
+    from rpg.envcheck import diagnose, format_problems
+
+    print("\n.env file")
+    problems = diagnose(("SPOTIFY_CLIENT_ID", "STRAVA_CLIENT_ID", "STRAVA_CLIENT_SECRET"))
+    if not problems:
+        print(f"  {OK} {REPO_ROOT / '.env'} parses cleanly")
+        return
+    print(f"  {BAD} {len(problems)} problem(s) found:\n")
+    print(format_problems(problems))
+
+
 def check_provider(name: str, loader, store_name: str) -> bool:
     from rpg.config import ConfigError
     from rpg.tokens import TokenStore
@@ -77,6 +91,8 @@ def main() -> int:
     deps_ok = check_dependencies()
     if not deps_ok:
         return 1
+
+    check_env_file()
 
     from rpg.config import spotify_config, strava_config
 

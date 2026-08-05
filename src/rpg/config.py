@@ -67,7 +67,16 @@ def load_env(dotenv_path: Path | None = None) -> None:
 def _require(name: str, hint: str) -> str:
     value = (os.environ.get(name) or "").strip()
     if not value:
-        raise ConfigError(f"{name} is not set. {hint}")
+        env_path = REPO_ROOT / ".env"
+        where = (
+            f"Looked in {env_path} (exists, {env_path.stat().st_size} bytes)"
+            if env_path.exists()
+            else f"Looked for {env_path} — no such file"
+        )
+        raise ConfigError(
+            f"{name} is not set. {where}.\n{hint}\n"
+            "Run `python scripts/doctor.py` to diagnose the .env file itself."
+        )
     return value
 
 
