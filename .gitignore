@@ -1,0 +1,28 @@
+# Secrets and tokens — never commit these
+.env
+.tokens/
+*.pem
+
+# Real activity data pulled from Strava (personal)
+data/samples/*.json
+!data/samples/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+
+# Local DB (Phase 1)
+*.sqlite
+*.sqlite3
+*.db
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
