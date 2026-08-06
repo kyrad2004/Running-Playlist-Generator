@@ -187,56 +187,65 @@ silently, as is a case where both copies recorded heart rate and disagreed
 
 ---
 
-## Finding 5 — Cadence tracks pace (corrected)
+## Finding 5 — Within steady running, cadence is constant
 
-**This finding was wrong on first measurement, and the correction is the point.**
+This finding was measured three times and changed twice. The sequence is the
+result, not an embarrassment to hide.
 
-The first reading used a 365-day window, which yielded 10 cadence-carrying runs
-clustered inside a 1.8 min/mi band. Correlation came out at r = -0.12, and the
-conclusion was that cadence is a constant near 160 spm — one parameter, since
-the data didn't support two. The caveat recorded at the time was that every
-point was an easy-to-moderate effort and it should be revisited if faster
-running appeared.
+**First (365 days, 10 runs).** All clustered inside 1.8 min/mi. r = -0.12, so:
+cadence is constant. Caveat recorded at the time — every point was an
+easy-to-moderate effort.
 
-Widening to 730 days produced **37 runs across 3.9 min/mi — 7:15 to 11:09**:
+**Second (730 days, 37 runs).** Range widened to 3.9 min/mi, 7:15–11:09. r
+jumped to +0.61 against speed. Conclusion flipped: cadence tracks pace, fit a
+model.
 
-```
-   r = +0.61 against speed   (r² 0.37)
-   r = -0.54 against pace    (r² 0.29)
-   cadence = 131.9 + 0.1744 x speed(m/min),  ±3.9 spm
-```
+**Third (workouts classified).** The fastest runs turned out to be Nike Run Club
+**interval sessions**. Their average pace is fast because of the reps and their
+average cadence is high for the same reason — a within-session artifact, not a
+law about steady running. Removing them:
 
-The relationship was always there; the first sample was too narrow to see it.
-Fitting against **speed** rather than pace is the better form — cadence scales
-with how fast you're moving, and pace is its reciprocal.
+| Excluded | n | r | Pace range | Verdict |
+|---|---|---|---|---|
+| none | 37 | +0.61 | 7:15–11:09 | fit |
+| 1 fastest | 36 | +0.41 | 7:43–11:09 | fit, barely |
+| 2 fastest | 35 | +0.23 | 8:03–11:09 | refused |
+| 4 fastest | 33 | **−0.19** | 8:47–11:09 | refused |
 
-Fit quality is moderate, not decisive. Speed explains 37% of cadence variation
-and 3.9 spm of scatter remains, so the model shifts the target sensibly across
-zones but should never be read as precise.
+**The entire relationship lived in two to four interval workouts.** Across
+steady runs there is nothing: r = −0.19, and the sign isn't even stable.
 
-### What this changes for Phase 3
+### The conclusion
 
-The target is a function of the prescribed pace, not a constant — which is what
-makes the playlist *pace-synced* rather than a fixed-tempo mix:
+**Cadence is a constant near 160 spm**, with about 2.6 spm of scatter. Phase 3
+targets one number. That is where this started, but the first version was right
+by accident — a narrow window that happened to exclude the sessions that would
+have misled it. This version is right because the confounder was found and
+removed.
 
-| Zone | Pace | Target cadence | Half-time BPM band |
-|---|---|---|---|
-| Easy | 10:36 | 158 spm | 77–82 |
-| Marathon | 8:38 | 164 spm | 80–85 |
-| Threshold | 8:18 | 166 spm | 80–85 |
-| Interval | 7:38 | 169 spm | 82–87 |
+### Why the middle answer was seductive
 
-`fit_cadence_model()` refuses to return a model when the sample is too narrow or
-the correlation too weak (|r| < 0.4), falling back to a constant — so the
-original 10-point sample would still, correctly, produce no model.
+It had more data, a wider range, a stronger correlation, and a plausible
+mechanism — cadence really does rise with speed in the physiology literature.
+Every surface signal said "better." What it didn't have was homogeneous data:
+an interval session's average describes no part of the run.
 
-### The methodological lesson
+Three defences are now in the code:
 
-A correlation measured over a narrow slice of a variable's range says nothing
-about the full range. The first conclusion wasn't a miscalculation; it was a
-correct calculation on unrepresentative data. What caught it was widening the
-window and re-running the same check — which is the argument for having the
-tool report `r` rather than eyeballing a table.
+- `rpg.workout` classifies sessions by name, elevation per mile, and split
+  variance, and interval and hill runs are excluded from both VDOT scoring and
+  the cadence fit.
+- `CadenceModel` refits without its fastest point and reports when the
+  relationship rests on one run, which is how this gave itself away.
+- `diagnose_fit` reports n, range, and r whether or not the fit is accepted, so
+  "not enough data" and "plenty of data showing nothing" stay distinguishable.
+
+### What would change it back
+
+Genuine steady running at genuinely fast paces — a tempo run or a race at
+7:30/mi, not an interval average. If the steady-only range widens past ~3 min/mi
+and r climbs over 0.4, the model returns on its own. `fit_cadence_model` needs
+no editing to allow that; it re-decides every run.
 
 ---
 

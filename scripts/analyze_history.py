@@ -135,27 +135,6 @@ def report_workouts(runs, client, detail_budget: int) -> None:
         print("  split variance instead of guessing.")
 
 
-def report_cadence_fit(runs) -> None:
-    """The fitted model, and whether it survives losing its extreme point."""
-    from rpg.cadence import fit_cadence_model
-
-    model = fit_cadence_model(runs)
-    print("\nCadence model (steady runs only)")
-    print("─" * 78)
-    if model is None:
-        print("  No usable fit — too few steady runs with cadence, or the")
-        print("  relationship is too weak to justify a slope. Using a constant.")
-        return
-
-    print(f"  {model.describe()}")
-    print(f"  explains {model.explains * 100:.0f}% of cadence variation")
-    note = model.fragility_note()
-    if note:
-        print(f"\n  ⚠ FRAGILE: {note}")
-    else:
-        print("  Stable: the fit survives dropping its fastest run.")
-
-
 def report_timeline(runs) -> None:
     by_month: dict[str, list] = defaultdict(list)
     for run in runs:
@@ -253,56 +232,61 @@ def _stdev(values: list[float]) -> float:
 
 
 def report_cadence_model(runs) -> None:
-    """Cadence-vs-pace pairs are the calibration data for Phase 3.
+    """Cadence data and what it supports, using steady runs only.
 
-    The question this answers is whether target cadence needs to be a function
-    of pace at all. If cadence doesn't move with pace across the range actually
-    trained, a single constant is the better model — fewer parameters fitted to
-    the same data.
+    Interval and hill sessions are listed but excluded from the correlation:
+    their average pace is fast because of the reps and their average cadence is
+    high for the same reason, which manufactures a relationship that doesn't
+    hold across steady running.
     """
+    from rpg.cadence import diagnose_fit, fit_cadence_model
+    from rpg.workout import is_steady
+
     with_cadence = [r for r in runs if r.steps_per_minute and r.pace_per_mile_s]
     print("\nCadence calibration data (Phase 3)")
     print("─" * 78)
     if not with_cadence:
-        print("  No runs with cadence — the pace→cadence model has nothing to fit.")
-        print("  → Count your steps for 30s on one run and supply it as a constant.")
+        print("  No runs with cadence — nothing to calibrate against.")
         return
 
     with_cadence.sort(key=lambda r: r.pace_per_mile_s)
-    print(f"  {len(with_cadence)} run(s) carry cadence:\n")
-    print(f"    {'pace/mi':>8} {'spm':>6}   date")
+    print(f"  {len(with_cadence)} run(s) carry cadence "
+          f"('x' = interval or hill, excluded from the fit):\n")
+    print(f"    {'':2} {'pace/mi':>8} {'spm':>6}   date")
     for run in with_cadence:
-        print(f"    {format_pace(run.pace_per_mile_s):>8} {run.steps_per_minute:>6.0f}"
+        mark = "  " if is_steady(run) else " x"
+        print(f"   {mark} {format_pace(run.pace_per_mile_s):>8} {run.steps_per_minute:>6.0f}"
               f"   {(run.start_date_local or '')[:10]}")
 
-    spms = [r.steps_per_minute for r in with_cadence]
-    paces = [r.pace_per_mile_s for r in with_cadence]
-    mean_spm = sum(spms) / len(spms)
-    spread = max(paces) - min(paces)
+    diagnostics = diagnose_fit(runs)
+    steady = [r for r in with_cadence if is_steady(r)]
+    if steady:
+        spms = [r.steps_per_minute for r in steady]
+        print(f"\n  steady runs   n={diagnostics.n}, cadence {min(spms):.0f}-{max(spms):.0f} spm, "
+              f"mean {sum(spms) / len(spms):.0f}, sd {_stdev(spms):.1f}")
+    if diagnostics.excluded_non_steady:
+        print(f"  excluded      {diagnostics.excluded_non_steady} interval/hill session(s)")
+    if diagnostics.pace_range:
+        lo, hi = diagnostics.pace_range
+        print(f"  pace range    {format_pace(lo)}-{format_pace(hi)}/mi "
+              f"({diagnostics.pace_spread_seconds / 60:.1f} min/mi)")
+    if diagnostics.r is not None:
+        print(f"  correlation   r = {diagnostics.r:+.2f}")
 
-    print(f"\n  cadence  {min(spms):.0f}–{max(spms):.0f} spm, "
-          f"mean {mean_spm:.0f}, sd {_stdev(spms):.1f}")
-    print(f"  pace     {format_pace(min(paces))}–{format_pace(max(paces))}/mi "
-          f"({spread / 60:.1f} min/mi spread)")
+    print(f"\n  {diagnostics.reason}")
 
-    r = _pearson(paces, spms)
-    if r is None:
-        print("\n  Not enough points to test whether cadence tracks pace.")
+    model = fit_cadence_model(runs)
+    if model is None:
+        print(f"\n  → Phase 3 uses a constant target of "
+              f"{sum(r.steps_per_minute for r in steady) / len(steady):.0f} spm"
+              if steady else "\n  → Phase 3 uses the default constant target.")
         return
 
-    print(f"  correlation (pace vs cadence)  r = {r:+.2f}")
-
-    if spread < 60:
-        print("\n  ⚠ Paces too clustered to trust the correlation either way.")
-        print("    Treat cadence as constant and revisit if the range widens.")
-    elif abs(r) < 0.4:
-        print(f"\n  → Cadence does NOT track pace across the range you train at.")
-        print(f"    Use a single target of {mean_spm:.0f} spm rather than fitting a")
-        print("    slope: one parameter, and the data doesn't support two.")
-        print(f"    Music target: {mean_spm:.0f} BPM, or {mean_spm / 2:.0f} BPM at half-time.")
-    else:
-        print(f"\n  → Cadence does track pace (r = {r:+.2f}). A linear")
-        print("    pace→cadence model is justified; fit it in Phase 3.")
+    print(f"\n  → {model.describe()}")
+    print(f"    explains {model.explains * 100:.0f}% of cadence variation")
+    note = model.fragility_note()
+    if note:
+        print(f"\n  ⚠ FRAGILE: {note}")
 
 
 def main() -> int:
@@ -358,7 +342,6 @@ def main() -> int:
     report_recency(runs)
     report_fitness_anchor(runs)
     report_cadence_model(runs)
-    report_cadence_fit(runs)
     print()
     return 0
 

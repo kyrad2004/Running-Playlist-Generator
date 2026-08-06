@@ -208,6 +208,82 @@ def fit_cadence_model(runs: Iterable[RunSummary]) -> CadenceModel | None:
     )
 
 
+@dataclass(frozen=True)
+class FitDiagnostics:
+    """Why a cadence fit was accepted or refused.
+
+    Returning a bare None loses the interesting part: whether there was too
+    little data, or plenty of data showing no relationship. Those call for
+    opposite responses — collect more runs, versus stop looking.
+    """
+
+    n: int
+    r: float | None
+    pace_range: tuple[float, float] | None  # seconds per mile, fast to slow
+    excluded_non_steady: int
+    accepted: bool
+    reason: str
+
+    @property
+    def pace_spread_seconds(self) -> float | None:
+        if not self.pace_range:
+            return None
+        return self.pace_range[1] - self.pace_range[0]
+
+
+def diagnose_fit(runs: Sequence[RunSummary]) -> FitDiagnostics:
+    """Report what a cadence fit found, whether or not it succeeded."""
+    with_cadence = [r for r in runs if r.steps_per_minute and r.average_speed_mps]
+    steady = [r for r in with_cadence if is_steady(r)]
+    excluded = len(with_cadence) - len(steady)
+
+    if len(steady) < MIN_FIT_POINTS:
+        return FitDiagnostics(
+            n=len(steady),
+            r=None,
+            pace_range=None,
+            excluded_non_steady=excluded,
+            accepted=False,
+            reason=(
+                f"Only {len(steady)} steady run(s) carry cadence; {MIN_FIT_POINTS} "
+                "are needed. Collect more before concluding anything."
+            ),
+        )
+
+    xs = [r.average_speed_mps * 60.0 for r in steady]
+    ys = [r.steps_per_minute for r in steady]
+    n = len(xs)
+    mx, my = sum(xs) / n, sum(ys) / n
+    dx = [x - mx for x in xs]
+    dy = [y - my for y in ys]
+    sxx = sum(v * v for v in dx)
+    syy = sum(v * v for v in dy)
+    r = sum(a * b for a, b in zip(dx, dy)) / (sxx * syy) ** 0.5 if sxx and syy else None
+
+    paces = sorted(METERS_PER_MILE / r_.average_speed_mps for r_ in steady)
+    pace_range = (paces[0], paces[-1])
+
+    if r is None:
+        reason = "No variation in speed or cadence to correlate."
+    elif abs(r) < MIN_USEFUL_R:
+        reason = (
+            f"n={n} steady runs across {(pace_range[1] - pace_range[0]) / 60:.1f} min/mi "
+            f"give r={r:+.2f}, below the {MIN_USEFUL_R} threshold. Within steady "
+            "running, cadence does not track pace — use a constant."
+        )
+    else:
+        reason = f"n={n}, r={r:+.2f} — a slope is justified."
+
+    return FitDiagnostics(
+        n=n,
+        r=r,
+        pace_range=pace_range,
+        excluded_non_steady=excluded,
+        accepted=r is not None and abs(r) >= MIN_USEFUL_R,
+        reason=reason,
+    )
+
+
 def target_cadence(
     pace_seconds_per_mile: float | None = None,
     model: CadenceModel | None = None,
