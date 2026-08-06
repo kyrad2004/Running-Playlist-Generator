@@ -1,5 +1,7 @@
 """Duplicate detection, fixtured on real dual-recorded pairs."""
 
+import pytest
+
 from rpg.activity import summarize
 from rpg.dedupe import dedupe, find_duplicate_groups
 
@@ -174,3 +176,44 @@ def test_heartrate_conflict_is_surfaced():
 def test_no_conflict_when_only_one_copy_has_heartrate():
     runs = [run(1, "2026-02-22", 13.28), run(2, "2026-02-22", 13.27, hr=169)]
     assert find_duplicate_groups(runs)[0].heartrate_conflict is None
+
+
+def test_matching_clocks_group_despite_divergent_distances():
+    """The real 2026-03-04 pair: 15.54 vs 15.56 min, but 2.09 vs 1.65 mi.
+    A distance-only rule would have to be loosened to absurdity to catch this;
+    the clocks make it obvious."""
+    runs = [
+        run(1, "2026-03-04", 2.09, seconds=932, name="Lunch Run"),
+        run(2, "2026-03-04", 1.65, seconds=934, hr=157, name="Lunch Run"),
+    ]
+    groups = find_duplicate_groups(runs)
+    assert len(groups) == 1
+    assert groups[0].distance_conflict == pytest.approx(0.21, abs=0.01)
+
+
+def test_distance_conflict_is_recorded_on_the_merged_run():
+    runs = [
+        run(1, "2026-03-04", 2.09, seconds=932),
+        run(2, "2026-03-04", 1.65, seconds=934, hr=157),
+    ]
+    assert find_duplicate_groups(runs)[0].merged().raw["_distance_conflict"] > 0.1
+
+
+def test_no_distance_conflict_when_tracks_agree():
+    runs = [
+        run(1, "2026-02-22", 13.28, seconds=7597),
+        run(2, "2026-02-22", 13.27, seconds=7592, hr=169),
+    ]
+    group = find_duplicate_groups(runs)[0]
+    assert group.distance_conflict is None
+    assert "_distance_conflict" not in group.merged().raw
+
+
+def test_no_distance_conflict_when_clocks_also_differ():
+    """Different durations AND distances is a warmup difference, not a bad
+    track — the distance is still usable."""
+    runs = [
+        run(1, "2026-01-21", 8.75, seconds=4681),
+        run(2, "2026-01-21", 8.00, seconds=4664, hr=167),
+    ]
+    assert find_duplicate_groups(runs)[0].distance_conflict is None

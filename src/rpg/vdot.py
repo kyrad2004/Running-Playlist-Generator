@@ -332,12 +332,19 @@ def _mmss(seconds: float) -> str:
 
 
 def score_efforts(runs: Iterable[RunSummary]) -> list[Effort]:
-    """VDOT for every run long enough to be meaningful, best first."""
+    """VDOT for every run long enough to be meaningful, best first.
+
+    Runs whose two recordings timed the same effort but disagreed on distance
+    are skipped entirely. VDOT is a function of pace, and a pace computed from a
+    distance known to be wrong is not a weak estimate — it's a fabricated one.
+    """
     efforts: list[Effort] = []
     for run in runs:
         if not run.distance_m or not run.moving_time_s:
             continue
         if run.distance_m < MIN_EFFORT_METERS:
+            continue
+        if run.raw.get("_distance_conflict"):
             continue
         try:
             efforts.append(Effort(run, vdot_from_effort(run.distance_m, run.moving_time_s)))

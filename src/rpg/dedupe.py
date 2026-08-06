@@ -23,6 +23,16 @@ from .activity import RunSummary
 DISTANCE_TOLERANCE = 0.25
 TIME_TOLERANCE = 0.30
 
+# Two recordings whose durations agree this closely are timing the same run,
+# whatever their distances say. Observed: a pair 1.8 seconds apart (0.19%) whose
+# distances differed by 21% — one GPS track had simply lost the plot. Matching on
+# duration catches that where a distance-only rule would not.
+SAME_CLOCK_TOLERANCE = 0.02
+
+# Beyond this, the two tracks disagree enough that neither distance can be
+# trusted, so the run is unusable for anything pace-derived.
+DISTANCE_CONFLICT = 0.10
+
 # Below this, the two copies agree closely enough to merge without a second look.
 HIGH_CONFIDENCE_DISTANCE = 0.05
 
@@ -82,6 +92,23 @@ class DuplicateGroup:
         return self.distance_gap <= HIGH_CONFIDENCE_DISTANCE
 
     @property
+    def distance_conflict(self) -> float | None:
+        """Distance gap when the clocks agree but the tracks don't.
+
+        Two devices timing the same run to within a couple of seconds while
+        disagreeing on how far it went means one measured badly. Which one is
+        wrong is unknowable from the data, so neither distance — and therefore
+        neither pace — should feed a fitness estimate.
+        """
+        times = [r.moving_time_s for r in self.runs if r.moving_time_s]
+        if len(times) < 2:
+            return None
+        if (max(times) - min(times)) / max(times) > SAME_CLOCK_TOLERANCE:
+            return None
+        gap = self.distance_gap
+        return gap if gap >= DISTANCE_CONFLICT else None
+
+    @property
     def heartrate_conflict(self) -> float | None:
         """Spread in bpm when more than one copy recorded heart rate.
 
@@ -125,6 +152,11 @@ class DuplicateGroup:
                 merged.name = other.name
 
         merged.raw["_merged_from"] = [r.id for r in self.runs]
+        # Mark an untrustworthy distance so downstream consumers can refuse it
+        # rather than silently averaging over a measurement error.
+        conflict = self.distance_conflict
+        if conflict is not None:
+            merged.raw["_distance_conflict"] = conflict
         return merged
 
 
@@ -169,11 +201,18 @@ def find_duplicate_groups(
 def _is_match(
     a: RunSummary, b: RunSummary, distance_tolerance: float, time_tolerance: float
 ) -> bool:
+    time_gap = _relative_gap(a.moving_time_s, b.moving_time_s)
+
+    # Near-identical duration is decisive on its own. When one device's distance
+    # is wrong, the clocks still agree — so requiring the distances to match too
+    # would miss exactly the pairs most worth catching.
+    if time_gap is not None and time_gap <= SAME_CLOCK_TOLERANCE:
+        return True
+
     distance_gap = _relative_gap(a.distance_m, b.distance_m)
     if distance_gap is None or distance_gap > distance_tolerance:
         return False
 
-    time_gap = _relative_gap(a.moving_time_s, b.moving_time_s)
     # Missing duration on either side shouldn't veto a clear distance match.
     if time_gap is not None and time_gap > time_tolerance:
         return False

@@ -399,3 +399,27 @@ def test_parse_race_rejects_bad_input():
     for bad in ("5K", "10 miles=40:00", "5K=1:2:3:4"):
         with pytest.raises(ValueError):
             parse_race(bad)
+
+
+def test_runs_with_a_distance_conflict_are_not_scored():
+    """A pace derived from a distance known to be wrong isn't a weak estimate,
+    it's a fabricated one — so it must not become the anchor."""
+    good = make_run(1, "2026-02-22", 13.27, 9 * 60 + 32)
+    bad = make_run(2, "2026-03-04", 2.09, 7 * 60 + 26)
+    bad.raw["_distance_conflict"] = 0.21
+
+    scored = score_efforts([good, bad])
+    assert [e.run.id for e in scored] == [1]
+
+
+def test_conflicted_run_does_not_become_the_anchor():
+    runs = [
+        make_run(1, "2026-02-22", 13.27, 9 * 60 + 32, name="Malta Half Marathon"),
+        make_run(2, "2026-02-02", 10.05, 9 * 60 + 27),
+        make_run(3, "2026-01-21", 8.75, 8 * 60 + 55),
+    ]
+    outlier = make_run(4, "2026-03-04", 2.09, 7 * 60 + 26, name="Lunch Run")
+    outlier.raw["_distance_conflict"] = 0.21
+
+    estimate = estimate_from_runs(runs + [outlier], today=TODAY)
+    assert estimate.best.run.id != 4
