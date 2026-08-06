@@ -58,6 +58,8 @@ src/rpg/
   spotify.py     Authorization Code + PKCE, Web API client
   strava.py      Authorization Code, API v3 client
   activity.py    Strava payloads -> pace, cadence, HR coverage
+  dedupe.py      collapse dual-recorded activities
+  vdot.py        Daniels & Gilbert fitness model + staleness
 
 scripts/
   auth_spotify.py     one-time Spotify authorization
@@ -65,6 +67,8 @@ scripts/
   doctor.py           check deps, credentials, cached tokens
   probe_spotify.py    probe every endpoint the project needs
   inspect_strava.py   pull real runs, report field coverage
+  analyze_history.py  deduplicated history, cadence, staleness
+  vdot_report.py      VDOT, training paces, race predictions
 
 docs/
   API_SETUP.md        registration walkthrough + troubleshooting
@@ -95,8 +99,26 @@ Strava's refresh-token rotation, partial-scope grants, 429 retry with
 
 | Phase | Scope | Status |
 |---|---|---|
-| 0 | API auth + feasibility | auth done; BPM source still to choose |
-| 1 | Strava ingestion → SQLite | not started |
-| 2 | VDOT, zones, HR/no-HR branch | not started |
-| 3 | BPM matching → playlist | blocked on BPM source |
+| 0 | API auth + feasibility | done — see PHASE0_FINDINGS.md |
+| 1 | Strava ingestion → SQLite | dedupe done; storage not started |
+| 2 | VDOT, zones, HR/no-HR branch | VDOT + staleness done; zones next |
+| 3 | BPM matching → playlist | target is a constant (~160 BPM); BPM source open |
 | 4 | AI rationale | not started |
+
+### VDOT
+
+`rpg.vdot` implements Daniels & Gilbert directly rather than interpolating a
+table, so any VDOT works, not just the printed rows. Tests anchor it to
+published table values — VDOT 50 predicts a 19:57 5K and a 6:51/mi threshold
+pace, and this returns 19:56 and 6:51.
+
+`estimate_from_runs` takes the **maximum** VDOT across recent runs, because an
+easy run scores far below true fitness and the hardest effort is the closest
+available proxy for a maximal one. That has two failure modes, and both are
+reported rather than hidden:
+
+- **Staleness.** The best effort is often an old race. An estimate is marked
+  `stale` when the anchor is over 90 days old or recent volume is too thin to
+  confirm it, and `insufficient` when there aren't enough qualifying runs.
+- **Outliers.** A short run scoring well above every longer effort is usually a
+  bad GPS distance, not a breakthrough, so it gets flagged.
