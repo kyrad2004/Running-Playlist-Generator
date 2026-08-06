@@ -127,11 +127,18 @@ without spending rate limit.
 
 ## Rate limits
 
-**Strava** — 100 requests / 15 min, 1,000 / day for reads. The 15-minute window
-resets on the quarter hour; the daily counter at midnight UTC. Every response's
-usage headers are parsed and printed by the scripts. Pulling 60 days of runs
-costs 1–2 requests, so you have plenty of headroom, but a loop that fetches
-detail for every activity will burn it fast.
+**Strava** — two limits apply at once, in separate response headers:
+
+| | 15 min | per day | header |
+|---|---|---|---|
+| Overall | 200 | 2,000 | `X-RateLimit-*` |
+| Read-only | 100 | 1,000 | `X-ReadRateLimit-*` |
+
+This project only reads, so the **read limit is the one that binds** — the
+scripts print both and label it. The 15-minute window resets on the quarter
+hour; the daily counter at midnight UTC. Pulling 60 days of runs costs 1–2
+requests, but fetching detail for every activity costs one request each, so a
+loop over a year of history will burn through it quickly.
 
 **Spotify** — a rolling ~30-second window, not published as a fixed number.
 `429` responses carry `Retry-After`, which `rpg/transport.py` honours.

@@ -144,10 +144,72 @@ test covering it.
 
 ### Rate limits
 
-100 requests / 15 min and 1,000 / day for reads. The 15-minute window resets on
-the quarter hour, the daily counter at midnight UTC. Usage comes back in
-`X-RateLimit-Limit` / `X-RateLimit-Usage` headers, which `rpg.transport` parses
-and the scripts print.
+Two limits apply simultaneously and are reported in different headers: overall
+(`X-RateLimit-*`, 200 per 15 min / 2,000 per day) and read-only
+(`X-ReadRateLimit-*`, 100 / 1,000). This project only reads, so the read limit
+binds first. `rpg.transport.RateLimitStatus` parses both and labels which one
+matters.
+
+---
+
+## Finding 4 — The real data is thinner than the plan assumed
+
+Measured against a live account, 60-day window:
+
+| | Result | Consequence |
+|---|---|---|
+| Runs | **2** (need 7+) | Cold start isn't an edge case — it's the only case |
+| Heart rate | **0%** | The `has_heartrate` branch has no data to validate against |
+| Cadence | **0%** | Phase 3 cannot match music to *measured* cadence |
+| Pace | 100% | The one signal we can rely on |
+
+This is the profile of phone-recorded runs. Strava's mobile app captures GPS, so
+distance and pace are solid, but heart rate needs a strap or watch and running
+cadence needs a footpod or watch — neither is inferred from the phone. Unless
+the hardware changes, **these columns stay empty**, so they should be treated as
+permanently absent rather than as a gap that fills in later.
+
+### What has to change
+
+**Cold start becomes the primary path, not a fallback.** Phase 2 Week 4 lists
+the data-sufficiency check and the onboarding fallback as separate items, with
+rolling VDOT as the main route. At 2 runs it's the reverse: build the onboarding
+estimate first, and treat rolling VDOT as the upgrade that switches on once
+history exists.
+
+**The HR branch becomes untestable, not unbuildable.** It can still be written —
+it's a good design point and worth showing — but the plan's benchmark ("test
+against your own real data") can't be met for that path. Better to say so
+explicitly than to pretend it was validated.
+
+**Cadence has to be modeled from pace.** This is the substantive change. Phase 3
+assumed measured cadence; with none available, target cadence must be derived.
+Step rate rises with speed in a roughly linear way over normal training paces,
+so a `cadence ≈ a + b × speed` model with a user-supplied calibration point (count
+your steps for 30 seconds on one run, enter it once) is the workable version.
+Treat the model as an assumption to test on a real run, which is exactly what
+the Phase 3 benchmark already asks.
+
+**Half-time matching stops being optional.** A 170 spm target has no useful pool
+of 170 BPM music — most popular music sits between 90 and 140 BPM. Matching 85
+BPM at half-time is the normal case, not the edge case the plan implies.
+
+### Two fields worth exploiting
+
+Dumping a detail payload surfaced two things the plan doesn't mention:
+
+- **`best_efforts`** — Strava pre-computes fastest 400m, ½ mile, 1k and mile
+  splits per run. That's a ready-made input to VDOT, replacing the "roll your own
+  best recent effort" work in Week 4. Caveat: efforts from easy runs aren't
+  maximal, so VDOT derived from them **underestimates** fitness. It's a floor,
+  not an estimate — which is another argument for asking the user directly during
+  onboarding.
+- **`perceived_exertion`** — a user-entered 1–10 effort rating. For an athlete
+  with no HR data this is the closest available stand-in for intensity, and it
+  costs nothing but the habit of filling it in. Worth checking whether it's
+  populated before designing around it.
+
+Both live on the detail endpoint only, at one request per activity.
 
 ---
 

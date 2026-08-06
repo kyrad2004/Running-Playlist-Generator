@@ -96,8 +96,12 @@ def main() -> int:
         return f"{payload.get('total', '?')} saved track(s) in library"
 
     def check_top() -> str:
-        payload = client.top_tracks(limit=1)
-        return f"{len(payload.get('items', []))} item(s) returned"
+        # Ask for a real page — limit=1 always returns 1 and tells us nothing
+        # about how big the candidate pool actually is.
+        payload = client.top_tracks(limit=50)
+        count = len(payload.get("items", []))
+        note = "" if count else " — needs listening history Spotify considers sufficient"
+        return f"{count} track(s) available{note}"
 
     def check_audio_features() -> str:
         track_id = state.get("track_id")

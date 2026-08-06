@@ -38,13 +38,22 @@ class RateLimitError(ApiError):
 
 @dataclass
 class RateLimitStatus:
-    """Strava reports usage in response headers; worth surfacing so you can see
-    how close a bulk pull is getting to the cap."""
+    """Strava's rate-limit headers.
+
+    Two limits apply at once, in separate headers. The overall limit
+    (X-RateLimit-*) is the higher one, currently 200 per 15 min / 2000 per day.
+    The read-only limit (X-ReadRateLimit-*) is stricter, currently 100 / 1000,
+    and since this project only reads, that is the one that actually binds.
+    """
 
     short_limit: int | None = None
     short_usage: int | None = None
     daily_limit: int | None = None
     daily_usage: int | None = None
+    read_short_limit: int | None = None
+    read_short_usage: int | None = None
+    read_daily_limit: int | None = None
+    read_daily_usage: int | None = None
 
     @classmethod
     def from_headers(cls, headers) -> "RateLimitStatus":
@@ -59,15 +68,32 @@ class RateLimitStatus:
 
         short_limit, daily_limit = pair(headers.get("X-RateLimit-Limit"))
         short_usage, daily_usage = pair(headers.get("X-RateLimit-Usage"))
-        return cls(short_limit, short_usage, daily_limit, daily_usage)
+        read_short_limit, read_daily_limit = pair(headers.get("X-ReadRateLimit-Limit"))
+        read_short_usage, read_daily_usage = pair(headers.get("X-ReadRateLimit-Usage"))
+        return cls(
+            short_limit,
+            short_usage,
+            daily_limit,
+            daily_usage,
+            read_short_limit,
+            read_short_usage,
+            read_daily_limit,
+            read_daily_usage,
+        )
 
     def describe(self) -> str:
         if self.short_limit is None:
             return "rate limit headers not reported"
-        return (
-            f"{self.short_usage}/{self.short_limit} in this 15-min window, "
+        text = (
+            f"overall {self.short_usage}/{self.short_limit} in this 15-min window, "
             f"{self.daily_usage}/{self.daily_limit} today"
         )
+        if self.read_short_limit is not None:
+            text += (
+                f" | read {self.read_short_usage}/{self.read_short_limit} and "
+                f"{self.read_daily_usage}/{self.read_daily_limit} — this is the binding one"
+            )
+        return text
 
 
 def request(

@@ -96,3 +96,28 @@ def test_rate_limit_status_handles_missing_headers():
 def test_rate_limit_status_handles_malformed_headers():
     status = RateLimitStatus.from_headers({"X-RateLimit-Limit": "nonsense"})
     assert status.short_limit is None
+
+
+def test_rate_limit_status_parses_read_specific_headers():
+    """Strava sends a stricter read-only limit in its own headers; that's the one
+    that binds for a read-only client."""
+    status = RateLimitStatus.from_headers(
+        {
+            "X-RateLimit-Limit": "200,2000",
+            "X-RateLimit-Usage": "1,4",
+            "X-ReadRateLimit-Limit": "100,1000",
+            "X-ReadRateLimit-Usage": "1,4",
+        }
+    )
+    assert status.short_limit == 200 and status.daily_limit == 2000
+    assert status.read_short_limit == 100 and status.read_daily_limit == 1000
+    assert "binding one" in status.describe()
+
+
+def test_rate_limit_status_without_read_headers_omits_that_clause():
+    status = RateLimitStatus.from_headers(
+        {"X-RateLimit-Limit": "200,2000", "X-RateLimit-Usage": "1,4"}
+    )
+    assert status.read_short_limit is None
+    assert "binding one" not in status.describe()
+    assert "overall 1/200" in status.describe()
