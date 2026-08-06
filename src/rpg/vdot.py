@@ -29,6 +29,7 @@ from datetime import date, datetime, timezone
 from typing import Iterable, Sequence
 
 from .activity import METERS_PER_MILE, RunSummary
+from .workout import is_steady
 
 # Curve 1 coefficients — oxygen cost of running.
 _VO2_C = -4.60
@@ -334,9 +335,13 @@ def _mmss(seconds: float) -> str:
 def score_efforts(runs: Iterable[RunSummary]) -> list[Effort]:
     """VDOT for every run long enough to be meaningful, best first.
 
-    Runs whose two recordings timed the same effort but disagreed on distance
-    are skipped entirely. VDOT is a function of pace, and a pace computed from a
-    distance known to be wrong is not a weak estimate — it's a fabricated one.
+    Two kinds of run are skipped entirely:
+
+    * a distance conflict — VDOT is a function of pace, and a pace computed from
+      a distance known to be wrong is not a weak estimate but a fabricated one;
+    * a non-steady session — an interval workout's average pace blends hard reps
+      with recovery jogs, and a hill session's is dragged down by climbing, so
+      neither average describes a sustained effort at any point of the run.
     """
     efforts: list[Effort] = []
     for run in runs:
@@ -345,6 +350,8 @@ def score_efforts(runs: Iterable[RunSummary]) -> list[Effort]:
         if run.distance_m < MIN_EFFORT_METERS:
             continue
         if run.raw.get("_distance_conflict"):
+            continue
+        if not is_steady(run):
             continue
         try:
             efforts.append(Effort(run, vdot_from_effort(run.distance_m, run.moving_time_s)))

@@ -99,6 +99,63 @@ def report_blocks(runs, today) -> None:
         print(f"\n    python scripts/vdot_report.py --as-of {top.midpoint()}")
 
 
+def report_workouts(runs, client, detail_budget: int) -> None:
+    """Classify sessions, so interval and hill averages stop poisoning the maths."""
+    from rpg.workout import NOT_STEADY, annotate_all
+
+    details: dict[int, dict] = {}
+    if detail_budget:
+        # Prefer runs carrying cadence: those are the ones feeding the model
+        # that a misclassification would distort.
+        ordered = sorted(runs, key=lambda r: (not r.has_cadence, r.start_date_local or ""),
+                         reverse=False)
+        targets = [r for r in ordered if r.has_cadence][:detail_budget]
+        targets += [r for r in ordered if not r.has_cadence][: detail_budget - len(targets)]
+        print(f"\nFetching detail for {len(targets)} run(s) to measure split variance…")
+        for n, run in enumerate(targets, start=1):
+            try:
+                details[run.id] = client.activity(run.id)
+            except ApiError as exc:
+                print(f"  stopped after {n - 1}: {exc}")
+                break
+        if client.last_rate_limit:
+            print(f"  {client.last_rate_limit.describe()}")
+
+    counts = annotate_all(runs, details)
+
+    print("\nWorkout types")
+    print("─" * 78)
+    for kind in sorted(counts, key=lambda k: -counts[k]):
+        excluded = " (excluded from VDOT and cadence fit)" if kind in NOT_STEADY else ""
+        source = "measured" if details else "from names only"
+        print(f"  {kind:<10} {counts[kind]:>3}{excluded}")
+    if not details:
+        print("\n  Classified from activity names alone. Many runs are called")
+        print("  'Afternoon Run', which says nothing — pass --detail N to measure")
+        print("  split variance instead of guessing.")
+
+
+def report_cadence_fit(runs) -> None:
+    """The fitted model, and whether it survives losing its extreme point."""
+    from rpg.cadence import fit_cadence_model
+
+    model = fit_cadence_model(runs)
+    print("\nCadence model (steady runs only)")
+    print("─" * 78)
+    if model is None:
+        print("  No usable fit — too few steady runs with cadence, or the")
+        print("  relationship is too weak to justify a slope. Using a constant.")
+        return
+
+    print(f"  {model.describe()}")
+    print(f"  explains {model.explains * 100:.0f}% of cadence variation")
+    note = model.fragility_note()
+    if note:
+        print(f"\n  ⚠ FRAGILE: {note}")
+    else:
+        print("  Stable: the fit survives dropping its fastest run.")
+
+
 def report_timeline(runs) -> None:
     by_month: dict[str, list] = defaultdict(list)
     for run in runs:
@@ -242,6 +299,15 @@ def main() -> int:
     parser.add_argument("--days", type=int, default=365,
                         help="lookback window; use 730+ to reach blocks over a year old")
     parser.add_argument("--show-duplicates", action="store_true", help="list every group")
+    parser.add_argument(
+        "--detail",
+        type=int,
+        default=0,
+        metavar="N",
+        help="fetch the detail payload for up to N runs to classify workouts by "
+        "split variance rather than by name. Costs one read per run against a "
+        "100-per-15-minute limit, so start small.",
+    )
     args = parser.parse_args()
 
     try:
@@ -275,11 +341,13 @@ def main() -> int:
     print(f"  {'cadence':<18} {before.cadence_pct:>11.0f}% {after_cov.cadence_pct:>13.0f}%")
 
     report_duplicates(groups, args.show_duplicates)
+    report_workouts(runs, client, args.detail)
     report_timeline(runs)
     report_blocks(runs, datetime.now(timezone.utc).date())
     report_recency(runs)
     report_fitness_anchor(runs)
     report_cadence_model(runs)
+    report_cadence_fit(runs)
     print()
     return 0
 

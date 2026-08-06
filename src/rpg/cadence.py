@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from typing import Iterable, Sequence
 
 from .activity import METERS_PER_MILE, RunSummary
+from .workout import is_steady
 
 # Fallback when there's no cadence history to fit against: the measured mean.
 DEFAULT_TARGET_SPM = 160.0
@@ -57,11 +58,44 @@ class CadenceModel:
     residual_sd: float
     min_speed: float  # bounds of the fitted data, in m/min
     max_speed: float
+    # Refit with the fastest run removed. A cadence-vs-speed fit is dominated by
+    # its extreme point, and the fastest run in a recreational history is often
+    # an interval session — whose *average* pace blends hard reps with recovery
+    # jogs and doesn't describe a steady effort at all.
+    r_without_extreme: float | None = None
+    slope_without_extreme: float | None = None
 
     @property
     def explains(self) -> float:
         """Share of cadence variation the model accounts for."""
         return self.r**2
+
+    @property
+    def is_fragile(self) -> bool:
+        """True when one point is carrying the relationship.
+
+        Either the correlation collapses below the useful threshold without it,
+        or the slope moves by more than a third — both mean the model describes
+        that run more than it describes the athlete.
+        """
+        if self.r_without_extreme is None or self.slope_without_extreme is None:
+            return False
+        if abs(self.r_without_extreme) < MIN_USEFUL_R:
+            return True
+        if self.slope == 0:
+            return True
+        return abs(self.slope_without_extreme - self.slope) / abs(self.slope) > 0.33
+
+    def fragility_note(self) -> str | None:
+        if not self.is_fragile:
+            return None
+        return (
+            f"Dropping the single fastest run takes r from {self.r:+.2f} to "
+            f"{self.r_without_extreme:+.2f} and the slope from {self.slope:.3f} to "
+            f"{self.slope_without_extreme:.3f}. The relationship rests on one point. "
+            "If that run was an interval session, its average pace mixes reps with "
+            "recoveries and is not a steady effort — use its laps instead."
+        )
 
     def cadence_at_speed(self, meters_per_minute: float) -> float:
         """Predicted cadence, clamped to the speeds actually observed.
@@ -109,10 +143,13 @@ def fit_cadence_model(runs: Iterable[RunSummary]) -> CadenceModel | None:
     weak to justify two parameters instead of one — in which case the caller
     should fall back to a constant target.
     """
+    # Non-steady sessions are excluded: pairing an interval workout's average
+    # cadence with its average pace relates two numbers that describe different
+    # parts of the run.
     points = [
         (r.average_speed_mps * 60.0, r.steps_per_minute)
         for r in runs
-        if r.steps_per_minute and r.average_speed_mps
+        if r.steps_per_minute and r.average_speed_mps and is_steady(r)
     ]
     if len(points) < MIN_FIT_POINTS:
         return None
@@ -140,6 +177,24 @@ def fit_cadence_model(runs: Iterable[RunSummary]) -> CadenceModel | None:
     residuals = [y - (intercept + slope * x) for x, y in points]
     residual_sd = (sum(v * v for v in residuals) / n) ** 0.5
 
+    # Refit without the fastest point. A cadence-vs-speed line is dominated by
+    # its extreme, so if the conclusion depends on one run, say so.
+    r_without = slope_without = None
+    if n > MIN_FIT_POINTS:
+        trimmed = sorted(points, key=lambda pair: pair[0])[:-1]
+        tx = [x for x, _ in trimmed]
+        ty = [y for _, y in trimmed]
+        m = len(trimmed)
+        tmx, tmy = sum(tx) / m, sum(ty) / m
+        tdx = [x - tmx for x in tx]
+        tdy = [y - tmy for y in ty]
+        tsxx = sum(v * v for v in tdx)
+        tsyy = sum(v * v for v in tdy)
+        if tsxx and tsyy:
+            tsxy = sum(a * b for a, b in zip(tdx, tdy))
+            slope_without = tsxy / tsxx
+            r_without = tsxy / (tsxx * tsyy) ** 0.5
+
     return CadenceModel(
         intercept=intercept,
         slope=slope,
@@ -148,6 +203,8 @@ def fit_cadence_model(runs: Iterable[RunSummary]) -> CadenceModel | None:
         residual_sd=residual_sd,
         min_speed=min(xs),
         max_speed=max(xs),
+        r_without_extreme=r_without,
+        slope_without_extreme=slope_without,
     )
 
 
