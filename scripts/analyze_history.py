@@ -177,7 +177,18 @@ def report_fitness_anchor(runs) -> None:
     print("\nFitness anchor for VDOT")
     print("─" * 78)
 
-    candidates = [r for r in runs if r.distance_miles and r.distance_miles >= 3.0]
+    # Apply the same exclusions vdot_report uses, or the two scripts name
+    # different anchors for the same history.
+    from rpg.workout import is_steady
+
+    candidates = [
+        r
+        for r in runs
+        if r.distance_miles
+        and r.distance_miles >= 3.0
+        and is_steady(r)
+        and not r.raw.get("_distance_conflict")
+    ]
     if not candidates:
         print("  No run of 3+ miles — VDOT from history isn't viable yet.")
         print("  → Use the onboarding estimate (ask for a recent 5K time).")
