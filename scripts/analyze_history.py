@@ -74,6 +74,31 @@ def report_duplicates(groups, verbose: bool) -> None:
         print("    Worth deciding which device you trust before HR feeds a zone calc.")
 
 
+def report_blocks(runs, today) -> None:
+    """Consistent stretches, which is where the engine can actually be tested."""
+    from rpg.blocks import best_block, find_training_blocks
+
+    blocks = find_training_blocks(runs)
+    print("\nConsistent training blocks")
+    print("─" * 78)
+    if not blocks:
+        print("  None found (needs 2+ runs/week for 3+ consecutive weeks).")
+        print("  Every window in this history is too sparse to evaluate against.")
+        return
+
+    top = best_block(blocks)
+    for block in blocks:
+        marker = " ←" if block is top else ""
+        age = block.age_days(today)
+        print(f"  {block.describe()}{marker}")
+        print(f"      longest run {block.longest_run_miles:.2f} mi, ended {age} days ago")
+
+    if top and top.midpoint():
+        print(f"\n  Largest block marked ←. To ask what the engine would have said")
+        print(f"  during it, when there was real training behind the answer:")
+        print(f"\n    python scripts/vdot_report.py --as-of {top.midpoint()}")
+
+
 def report_timeline(runs) -> None:
     by_month: dict[str, list] = defaultdict(list)
     for run in runs:
@@ -214,7 +239,8 @@ def report_cadence_model(runs) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Analyze deduplicated Strava history.")
-    parser.add_argument("--days", type=int, default=365)
+    parser.add_argument("--days", type=int, default=365,
+                        help="lookback window; use 730+ to reach blocks over a year old")
     parser.add_argument("--show-duplicates", action="store_true", help="list every group")
     args = parser.parse_args()
 
@@ -250,6 +276,7 @@ def main() -> int:
 
     report_duplicates(groups, args.show_duplicates)
     report_timeline(runs)
+    report_blocks(runs, datetime.now(timezone.utc).date())
     report_recency(runs)
     report_fitness_anchor(runs)
     report_cadence_model(runs)

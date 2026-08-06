@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import _bootstrap  # noqa: F401
 
@@ -142,7 +142,15 @@ def print_reality_check(estimate, runs) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="VDOT from Strava history.")
-    parser.add_argument("--days", type=int, default=365)
+    parser.add_argument("--days", type=int, default=365,
+                        help="lookback window; use 730+ to reach older training blocks")
+    parser.add_argument(
+        "--as-of",
+        metavar="YYYY-MM-DD",
+        help="evaluate as if today were this date, ignoring everything after it. "
+        "Use a date inside a consistent training block to see what the engine "
+        "would have said when there was real training behind the answer.",
+    )
     parser.add_argument("--vdot", type=float, help="skip Strava and use this VDOT")
     parser.add_argument(
         "--from-race",
@@ -191,9 +199,23 @@ def main() -> int:
     raw.sort(key=lambda r: r.start_date_local or "", reverse=True)
     runs, _ = dedupe(raw)
 
-    estimate = estimate_from_runs(runs)
+    as_of = None
+    if args.as_of:
+        try:
+            as_of = date.fromisoformat(args.as_of)
+        except ValueError:
+            print(f"--as-of must be YYYY-MM-DD, got {args.as_of!r}", file=sys.stderr)
+            return 2
+        # Hide the future from the engine, or the evaluation is not honest.
+        runs = [r for r in runs if (r.start_date_local or "")[:10] <= args.as_of]
+        if not runs:
+            print(f"No runs on or before {as_of}.", file=sys.stderr)
+            return 1
 
-    print(f"\nVDOT estimate — last {args.days} days, {len(runs)} distinct runs")
+    estimate = estimate_from_runs(runs, today=as_of)
+
+    when = f"as of {as_of}" if as_of else f"last {args.days} days"
+    print(f"\nVDOT estimate — {when}, {len(runs)} distinct runs")
     print("─" * 78)
     mark = CONFIDENCE_MARK[estimate.confidence]
     if estimate.vdot is None:
