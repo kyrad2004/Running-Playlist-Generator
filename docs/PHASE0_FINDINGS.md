@@ -230,6 +230,66 @@ across the range this runner trains in, and the data says so clearly.
 
 ---
 
+## Finding 5b — Without ISRC, matching is the hard part, not lookup
+
+The obvious framing of BPM sourcing is "call an API." That part is trivial. The
+part that decides whether Phase 3 works is that Spotify's February 2026 revision
+removed `external_ids`, and with it **ISRC** — the clean join key to any music
+database. Every lookup now goes through artist and title strings:
+
+```
+"Blinding Lights - Remastered 2021"    vs   "Blinding Lights"
+"Levitating (feat. DaBaby)"            vs   "Levitating"
+"Mr. Brightside" by a covers band      vs   The Killers' original
+```
+
+The last is the dangerous one. A confident match to the wrong recording gives a
+wrong BPM, and **a wrong BPM is worse than a missing one** — it puts a track in
+the playlist at the wrong tempo, and nothing surfaces the error until you're
+running to it. So `rpg.bpm` treats "no confident match" as a first-class result,
+never an exception, and scores every match:
+
+- Artist agreement is weighted hardest (0.65 vs 0.35), because a matching title
+  under a different artist is a cover, and covers are routinely at another tempo.
+- Live, remix, acoustic and sped-up markers are stripped to help matching but
+  **lower confidence by 25%**, since those recordings genuinely differ in tempo.
+- Misses are cached alongside hits. A track no database knows stays unknown, and
+  re-asking wastes rate limit on every run.
+
+### The half/double ambiguity is nearly free here
+
+BPM databases and detectors routinely disagree by a factor of two — a track that
+feels like 160 gets listed at 80. Normally that has to be resolved. But a runner
+at 160 spm can stride to either, so `rpg.cadence` accepts multipliers of 0.5, 1
+and 2, and the ambiguity mostly stops mattering.
+
+Which is fortunate, because **almost no popular music sits at 160 BPM**. The
+usable raw bands at a 160 ±5 target are:
+
+| Multiplier | Raw BPM | Use |
+|---|---|---|
+| ×2 | 77.5–82.5 | half-time — the common case |
+| ×1 | 155–165 | rare in pop |
+| ×0.5 | 310–330 | effectively never |
+
+That is roughly 35 BPM of usable space. Against a 1,501-track library it should
+leave a workable pool, but the number to measure is what fraction of a **real**
+library lands there — not what fraction a provider can price.
+
+### Still open
+
+No concrete provider is wired. [GetSongBPM](https://getsongbpm.com/api) is the
+leading candidate: free, 3,000 requests/hour, established — but a backlink to
+their site is **mandatory**, and accounts are suspended without notice if it's
+missing. Local analysis via `librosa` is ruled out: it needs audio files, and
+with `preview_url` dead and a streaming-only library there is nothing to analyze.
+
+The measurement that decides Phase 3's design is **match rate against real saved
+tracks**: 80%+ means per-track BPM works as planned; around 30% means falling
+back to curated BPM-band playlists.
+
+---
+
 ## Finding 6 — The fitness anchor is stale, and the engine has to know that
 
 The best VDOT input available is the Malta Half Marathon: 13.27 mi at 9:32/mi.

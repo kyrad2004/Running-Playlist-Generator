@@ -60,6 +60,8 @@ src/rpg/
   activity.py    Strava payloads -> pace, cadence, HR coverage
   dedupe.py      collapse dual-recorded activities
   vdot.py        Daniels & Gilbert fitness model + staleness
+  bpm.py         track matching + BPM provider interface
+  cadence.py     tempo matching, incl. half-time
 
 scripts/
   auth_spotify.py     one-time Spotify authorization
@@ -102,7 +104,7 @@ Strava's refresh-token rotation, partial-scope grants, 429 retry with
 | 0 | API auth + feasibility | done — see PHASE0_FINDINGS.md |
 | 1 | Strava ingestion → SQLite | dedupe done; storage not started |
 | 2 | VDOT, zones, HR/no-HR branch | VDOT + staleness done; zones next |
-| 3 | BPM matching → playlist | target is a constant (~160 BPM); BPM source open |
+| 3 | BPM matching → playlist | matching + cadence logic done; provider not chosen |
 | 4 | AI rationale | not started |
 
 ### VDOT
