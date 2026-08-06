@@ -187,46 +187,56 @@ silently, as is a case where both copies recorded heart rate and disagreed
 
 ---
 
-## Finding 5 — Cadence does not track pace, so Phase 3 gets simpler
+## Finding 5 — Cadence tracks pace (corrected)
 
-The plan calls for "cadence-to-BPM mapping logic (including half-time/full-time
-cadence matching)", which assumes target cadence is a function of pace. Ten runs
-carry cadence, spanning 8:47–10:37/mi — a 1.8 min/mi spread, wide enough to test
-that assumption:
+**This finding was wrong on first measurement, and the correction is the point.**
+
+The first reading used a 365-day window, which yielded 10 cadence-carrying runs
+clustered inside a 1.8 min/mi band. Correlation came out at r = -0.12, and the
+conclusion was that cadence is a constant near 160 spm — one parameter, since
+the data didn't support two. The caveat recorded at the time was that every
+point was an easy-to-moderate effort and it should be revisited if faster
+running appeared.
+
+Widening to 730 days produced **37 runs across 3.9 min/mi — 7:15 to 11:09**:
 
 ```
-   pace/mi   spm            n = 10
-      8:47   163            mean  159.5 spm
-      9:10   157            sd      2.5 spm
-      9:13   156            r     -0.12   (pace vs cadence)
-      9:43   159            r²     0.015
-      9:43   161
-      9:44   159            pace explains 1.5% of cadence variation
-      9:51   162
-     10:11   163
-     10:18   159
-     10:37   156
+   r = +0.61 against speed   (r² 0.37)
+   r = -0.54 against pace    (r² 0.29)
+   cadence = 131.9 + 0.1744 x speed(m/min),  ±3.9 spm
 ```
 
-**There is no relationship.** Over the range this athlete actually trains at,
-cadence is a constant near 160 spm with about 2.5 spm of noise. Fitting a
-pace→cadence slope would be fitting noise — the naive slope comes out at
-−0.58 spm per min/mi, which is the wrong sign and inside the error bars.
+The relationship was always there; the first sample was too narrow to see it.
+Fitting against **speed** rather than pace is the better form — cadence scales
+with how fast you're moving, and pace is its reciprocal.
 
-So Phase 3's target is a single number, not a model:
+Fit quality is moderate, not decisive. Speed explains 37% of cadence variation
+and 3.9 spm of scatter remains, so the model shifts the target sensibly across
+zones but should never be read as precise.
 
-- **Target: ~160 BPM, or ~80 BPM at half-time.**
-- One parameter instead of two, no calibration step, no model to validate.
-- Revisit only if genuinely fast running (intervals, a race) gets recorded — all
-  ten points here are easy-to-moderate efforts.
+### What this changes for Phase 3
 
-**Half-time matching stops being optional.** There is very little popular music
-at 160 BPM; most sits between 90 and 140. Matching at 80 BPM is the normal case,
-not the edge case the plan implies.
+The target is a function of the prescribed pace, not a constant — which is what
+makes the playlist *pace-synced* rather than a fixed-tempo mix:
 
-This is a case where real data made the build smaller. The generic advice is
-"cadence rises with speed," and it does across a wide enough range — but not
-across the range this runner trains in, and the data says so clearly.
+| Zone | Pace | Target cadence | Half-time BPM band |
+|---|---|---|---|
+| Easy | 10:36 | 158 spm | 77–82 |
+| Marathon | 8:38 | 164 spm | 80–85 |
+| Threshold | 8:18 | 166 spm | 80–85 |
+| Interval | 7:38 | 169 spm | 82–87 |
+
+`fit_cadence_model()` refuses to return a model when the sample is too narrow or
+the correlation too weak (|r| < 0.4), falling back to a constant — so the
+original 10-point sample would still, correctly, produce no model.
+
+### The methodological lesson
+
+A correlation measured over a narrow slice of a variable's range says nothing
+about the full range. The first conclusion wasn't a miscalculation; it was a
+correct calculation on unrepresentative data. What caught it was widening the
+window and re-running the same check — which is the argument for having the
+tool report `r` rather than eyeballing a table.
 
 ---
 

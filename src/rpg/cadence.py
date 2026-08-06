@@ -1,8 +1,19 @@
 """Matching music tempo to running cadence.
 
-Finding 5 measured cadence against pace across a 1.8 min/mi spread and found no
-relationship (r = -0.12, sd 2.5 spm). So the target is a constant, not a model —
-one parameter, and the data doesn't support two.
+Cadence rises with speed, so the target BPM depends on the pace being
+prescribed — which is what makes a playlist "pace-synced" rather than just a
+fixed-tempo mix.
+
+An earlier reading of this data concluded the opposite. Ten cadence-carrying
+runs clustered inside a 1.8 min/mi band gave r = -0.12, and a constant looked
+like the honest model. Widening the history to two years produced 37 runs across
+3.9 min/mi — 7:15 to 11:09 — and the relationship appeared: r = +0.61 against
+speed. The first conclusion wasn't wrong about its data, it was wrong about how
+little of the range that data covered.
+
+Fit quality is moderate, not decisive: speed explains about 37% of cadence
+variation, and 3.9 spm of scatter remains. So the model shifts the target
+sensibly across zones, but it should never be treated as precise.
 
 The half/double problem that plagues BPM detection is nearly free here. A track
 that "feels" like 160 is routinely listed at 80, and normally you'd have to
@@ -17,15 +28,142 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable, Sequence
 
-# Measured mean across the 10 cadence-carrying runs in a real account.
+from .activity import METERS_PER_MILE, RunSummary
+
+# Fallback when there's no cadence history to fit against: the measured mean.
 DEFAULT_TARGET_SPM = 160.0
 
-# Measured sd was 2.5 spm; ±5 covers roughly two standard deviations.
+# Scatter around the fitted line is ~3.9 spm, so ±5 is about one standard error.
 DEFAULT_TOLERANCE_SPM = 5.0
 
 # Multipliers a runner can actually stride to. 1 is a step per beat, 2 doubles a
 # slow track, 0.5 halves a fast one. Beyond that the beat stops being findable.
 STRIDE_MULTIPLIERS = (0.5, 1.0, 2.0)
+
+
+@dataclass(frozen=True)
+class CadenceModel:
+    """Cadence as a linear function of speed.
+
+    Fitted against speed rather than pace: cadence scales with how fast you're
+    moving, and pace is its reciprocal, so a straight line fits speed better
+    (r² 0.37 vs 0.29 on the reference data).
+    """
+
+    intercept: float  # spm
+    slope: float  # spm per m/min
+    r: float
+    n: int
+    residual_sd: float
+    min_speed: float  # bounds of the fitted data, in m/min
+    max_speed: float
+
+    @property
+    def explains(self) -> float:
+        """Share of cadence variation the model accounts for."""
+        return self.r**2
+
+    def cadence_at_speed(self, meters_per_minute: float) -> float:
+        """Predicted cadence, clamped to the speeds actually observed.
+
+        Extrapolating past the data invents a number: nothing here says what
+        happens at 6:00/mi if no run was ever that fast.
+        """
+        clamped = max(self.min_speed, min(self.max_speed, meters_per_minute))
+        return self.intercept + self.slope * clamped
+
+    def cadence_at_pace(self, seconds_per_mile: float) -> float:
+        if seconds_per_mile <= 0:
+            raise ValueError("Pace must be positive")
+        return self.cadence_at_speed(METERS_PER_MILE / (seconds_per_mile / 60.0))
+
+    def describe(self) -> str:
+        return (
+            f"cadence = {self.intercept:.1f} + {self.slope:.4f} x speed(m/min), "
+            f"r={self.r:+.2f} over n={self.n}, ±{self.residual_sd:.1f} spm"
+        )
+
+
+# Fitted from 37 cadence-carrying runs spanning 7:15-11:09/mi in a real account.
+# Replaced by fit_cadence_model() as soon as there's history to fit against.
+REFERENCE_MODEL = CadenceModel(
+    intercept=131.88,
+    slope=0.17438,
+    r=0.605,
+    n=37,
+    residual_sd=3.86,
+    min_speed=METERS_PER_MILE / (11 * 60 + 9) * 60,
+    max_speed=METERS_PER_MILE / (7 * 60 + 15) * 60,
+)
+
+# Below this the relationship isn't established well enough to prefer over a
+# constant — r² under ~0.15 means the line barely beats the mean.
+MIN_USEFUL_R = 0.4
+MIN_FIT_POINTS = 8
+
+
+def fit_cadence_model(runs: Iterable[RunSummary]) -> CadenceModel | None:
+    """Fit cadence against speed from a run history.
+
+    Returns None when there isn't enough data, or when the relationship is too
+    weak to justify two parameters instead of one — in which case the caller
+    should fall back to a constant target.
+    """
+    points = [
+        (r.average_speed_mps * 60.0, r.steps_per_minute)
+        for r in runs
+        if r.steps_per_minute and r.average_speed_mps
+    ]
+    if len(points) < MIN_FIT_POINTS:
+        return None
+
+    xs = [x for x, _ in points]
+    ys = [y for _, y in points]
+    n = len(points)
+    mean_x, mean_y = sum(xs) / n, sum(ys) / n
+    dx = [x - mean_x for x in xs]
+    dy = [y - mean_y for y in ys]
+
+    sxx = sum(v * v for v in dx)
+    syy = sum(v * v for v in dy)
+    if sxx == 0 or syy == 0:
+        return None
+
+    sxy = sum(a * b for a, b in zip(dx, dy))
+    slope = sxy / sxx
+    intercept = mean_y - slope * mean_x
+    r = sxy / (sxx * syy) ** 0.5
+
+    if abs(r) < MIN_USEFUL_R:
+        return None
+
+    residuals = [y - (intercept + slope * x) for x, y in points]
+    residual_sd = (sum(v * v for v in residuals) / n) ** 0.5
+
+    return CadenceModel(
+        intercept=intercept,
+        slope=slope,
+        r=r,
+        n=n,
+        residual_sd=residual_sd,
+        min_speed=min(xs),
+        max_speed=max(xs),
+    )
+
+
+def target_cadence(
+    pace_seconds_per_mile: float | None = None,
+    model: CadenceModel | None = None,
+) -> float:
+    """The cadence to match music against for a given prescribed pace.
+
+    With no pace or no model, falls back to the measured mean — a fixed-tempo
+    playlist, which is what the project would have shipped before the wider
+    history revealed the relationship.
+    """
+    if pace_seconds_per_mile is None:
+        return DEFAULT_TARGET_SPM
+    return (model or REFERENCE_MODEL).cadence_at_pace(pace_seconds_per_mile)
 
 
 @dataclass(frozen=True)
