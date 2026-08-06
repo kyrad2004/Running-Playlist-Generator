@@ -311,3 +311,91 @@ def test_easy_band_bounds_are_ordered_as_seconds():
     fast bound first or the range reads inverted."""
     paces = training_paces(41.0)
     assert paces.easy_slow > paces.easy_fast
+
+
+# -- plausibility: does the estimate survive contact with habitual pace? ----
+
+
+def test_implied_vdot_inverts_training_paces():
+    from rpg.vdot import INTENSITY, implied_vdot_if_pace_were
+
+    paces = training_paces(42.0)
+    assert implied_vdot_if_pace_were(paces.easy_fast, INTENSITY["easy_fast"]) == pytest.approx(
+        42.0, abs=0.01
+    )
+
+
+def test_plausibility_flags_an_estimate_that_is_too_low():
+    """The real complaint: VDOT 34 prescribes ~11:30/mi easy, but these runs are
+    all near 9:00/mi. Something is wrong with the estimate, not the runner."""
+    from rpg.vdot import check_plausibility
+
+    runs = [
+        make_run(1, "2026-08-02", 1.75, 8 * 60 + 55),
+        make_run(2, "2026-07-19", 2.40, 9 * 60 + 0),
+        make_run(3, "2026-05-16", 2.30, 9 * 60 + 36),
+        make_run(4, "2026-04-07", 2.76, 9 * 60 + 0),
+    ]
+    check = check_plausibility(34.1, runs)
+    assert check.looks_low
+    assert check.implied_low > 40
+    assert "too low" in check.message
+
+
+def test_plausibility_accepts_a_consistent_estimate():
+    """Easy runs actually run at easy pace — nothing to flag."""
+    from rpg.vdot import check_plausibility
+
+    paces = training_paces(42.0)
+    easy = (paces.easy_fast + paces.easy_slow) / 2
+    runs = [make_run(i, f"2026-08-0{i}", 4.0, easy) for i in range(1, 5)]
+    check = check_plausibility(42.0, runs)
+    assert not check.looks_low
+    assert check.message is None
+
+
+def test_plausibility_handles_missing_input():
+    from rpg.vdot import check_plausibility
+
+    assert not check_plausibility(None, []).looks_low
+    assert not check_plausibility(40.0, []).looks_low
+
+
+def test_decay_is_gentle_enough_to_be_defensible():
+    """4%/month capped at 20% took a 34.8 anchor to 28.5 and produced paces a
+    real runner rejected on sight. Keep the haircut modest."""
+    runs = [
+        make_run(1, "2026-02-22", 13.27, 9 * 60 + 32),
+        make_run(2, "2026-08-02", 1.75, 8 * 60 + 55),
+        make_run(3, "2026-07-19", 2.40, 9 * 60 + 0),
+    ]
+    estimate = estimate_from_runs(runs, today=TODAY)
+    assert estimate.decayed_vdot() >= estimate.vdot * 0.92
+
+
+def test_parse_race_accepts_common_formats():
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    from vdot_report import parse_race
+
+    label, meters, seconds = parse_race("5K=22:30")
+    assert label == "5K" and meters == 5000.0 and seconds == 1350
+
+    _, _, long_seconds = parse_race("marathon=3:10:49")
+    assert long_seconds == 3 * 3600 + 10 * 60 + 49
+
+    assert parse_race("half marathon=1:45:00")[1] == 21097.5
+
+
+def test_parse_race_rejects_bad_input():
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    from vdot_report import parse_race
+
+    for bad in ("5K", "10 miles=40:00", "5K=1:2:3:4"):
+        with pytest.raises(ValueError):
+            parse_race(bad)

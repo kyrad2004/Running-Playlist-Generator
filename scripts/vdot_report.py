@@ -26,10 +26,34 @@ from rpg.strava import StravaClient
 from rpg.transport import ApiError
 from rpg.vdot import (
     STANDARD_DISTANCES,
+    check_plausibility,
     estimate_from_runs,
     predict_race_time,
     training_paces,
+    vdot_from_effort,
 )
+
+
+def parse_race(text: str) -> tuple[str, float, float]:
+    """Parse '5K=22:30' or '10K=48:10' into (label, meters, seconds)."""
+    if "=" not in text:
+        raise ValueError("Expected DISTANCE=TIME, e.g. 5K=22:30")
+    label, _, time_text = text.partition("=")
+    label = label.strip()
+
+    key = next((k for k in STANDARD_DISTANCES if k.lower() == label.lower()), None)
+    if key is None:
+        options = ", ".join(STANDARD_DISTANCES)
+        raise ValueError(f"Unknown distance {label!r}. Options: {options}")
+
+    parts = [float(p) for p in time_text.strip().split(":")]
+    if len(parts) == 2:
+        seconds = parts[0] * 60 + parts[1]
+    elif len(parts) == 3:
+        seconds = parts[0] * 3600 + parts[1] * 60 + parts[2]
+    else:
+        raise ValueError("Time must be MM:SS or HH:MM:SS")
+    return key, STANDARD_DISTANCES[key], seconds
 
 CONFIDENCE_MARK = {"fresh": "\033[32m✓\033[0m", "stale": "\033[33m⚠\033[0m",
                    "insufficient": "\033[31m✗\033[0m"}
@@ -104,7 +128,12 @@ def print_reality_check(estimate, runs) -> None:
         print(f"  {(run.start_date_local or '')[:10]}  {run.distance_miles:>5.2f} mi @ "
               f"{format_pace(actual)}/mi   {verdict}{note}")
 
-    if faster_than_easy >= 3:
+    check = check_plausibility(vdot, runs)
+    if check.looks_low:
+        print(f"\n  ⚠ This estimate may be too LOW, not your running too hard.")
+        print(f"    {check.message}")
+        print(f"\n    Re-anchor:  python scripts/vdot_report.py --from-race 5K=MM:SS")
+    elif faster_than_easy >= 3:
         print(f"\n  {faster_than_easy} of your last {len(recent)} runs were faster than easy pace.")
         print("  Short runs at close to race effort with no easy volume underneath is")
         print("  exactly the pattern the 80/20 rule in Phase 2 exists to catch.")
@@ -115,8 +144,29 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="VDOT from Strava history.")
     parser.add_argument("--days", type=int, default=365)
     parser.add_argument("--vdot", type=float, help="skip Strava and use this VDOT")
+    parser.add_argument(
+        "--from-race",
+        metavar="DIST=TIME",
+        help="anchor on a race you actually raced, e.g. --from-race 5K=22:30. "
+        "More reliable than anything inferred from easy runs.",
+    )
     parser.add_argument("--top", type=int, default=8, help="how many scored efforts to list")
     args = parser.parse_args()
+
+    if args.from_race:
+        try:
+            label, meters, seconds = parse_race(args.from_race)
+        except ValueError as exc:
+            print(f"{exc}", file=sys.stderr)
+            return 2
+        vdot = vdot_from_effort(meters, seconds)
+        print(f"\nVDOT {vdot:.1f} from {label} in {format_duration(seconds)}")
+        print("─" * 78)
+        print("  Anchored on a stated maximal effort, so no staleness haircut applies.")
+        print_paces(vdot, f"from {label}")
+        print_predictions(vdot)
+        print()
+        return 0
 
     if args.vdot:
         print_paces(args.vdot, "supplied")

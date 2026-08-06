@@ -189,11 +189,14 @@ MIN_QUALIFYING_EFFORTS = 3
 # flagged rather than silently accepted as the anchor.
 OUTLIER_VDOT_GAP = 2.0
 
-# Detraining rule of thumb, not a fitted model: VO2max falls a few percent per
-# month of inactivity early on, then flattens. Used only to show how much the
-# age of an effort matters — never as a precise number.
-DECAY_PER_30_DAYS = 0.04
-MAX_DECAY = 0.20
+# Detraining rule of thumb, not a fitted model. Deliberately gentle: the large
+# VO2max losses reported in the literature come from near-total inactivity, and
+# an athlete still running at all retains far more than that. An earlier version
+# of this used 4% per month capped at 20%, which took a VDOT 34.8 anchor down to
+# 28.5 and produced training paces a real runner immediately recognised as
+# absurd. Treat it as a floor on plausible fitness, never as a measurement.
+DECAY_PER_30_DAYS = 0.015
+MAX_DECAY = 0.08
 
 
 @dataclass
@@ -254,6 +257,78 @@ class VdotEstimate:
             return self.vdot
         decay = min(DECAY_PER_30_DAYS * (self.age_days - 30) / 30.0, MAX_DECAY)
         return self.vdot * (1 - decay)
+
+
+def implied_vdot_if_pace_were(pace_seconds_per_mile: float, fraction: float) -> float:
+    """The VDOT for which this pace sits at a given fraction of VO2max.
+
+    The inverse question to `training_paces`: instead of "what should I run at
+    VDOT 40", this asks "if this pace really is my easy pace, how fit am I?"
+    """
+    if pace_seconds_per_mile <= 0:
+        raise VdotError("Pace must be positive")
+    velocity = METERS_PER_MILE / (pace_seconds_per_mile / 60.0)
+    return vo2_at_velocity(velocity) / fraction
+
+
+@dataclass
+class Plausibility:
+    """Whether an estimate survives contact with how the athlete actually runs.
+
+    A VDOT derived from one old effort can be badly wrong. Habitual training
+    pace is a second, independent line of evidence: if someone comfortably runs
+    every day at a pace the model says is far too hard for them, the model —
+    not the runner — is more likely to be mistaken.
+    """
+
+    looks_low: bool
+    median_recent_pace: float | None
+    implied_low: float | None  # if those runs are at the fast end of easy
+    implied_high: float | None  # if they're at the slow end of easy
+    runs_faster_than_easy: int
+    runs_considered: int
+    message: str | None
+
+
+def check_plausibility(
+    vdot: float | None,
+    runs: Sequence[RunSummary],
+    sample: int = 5,
+    threshold: float = 0.6,
+) -> Plausibility:
+    """Compare prescribed easy pace against recent habitual pace."""
+    recent = [r for r in runs[:sample] if r.pace_per_mile_s]
+    if vdot is None or not recent:
+        return Plausibility(False, None, None, None, 0, len(recent), None)
+
+    paces = sorted(r.pace_per_mile_s for r in recent)
+    median = paces[len(paces) // 2]
+    easy_fast = pace_at_intensity(vdot, INTENSITY["easy_fast"])
+    faster = sum(1 for p in paces if p < easy_fast)
+
+    implied_low = implied_vdot_if_pace_were(median, INTENSITY["easy_fast"])
+    implied_high = implied_vdot_if_pace_were(median, INTENSITY["easy_slow"])
+
+    looks_low = (faster / len(paces)) >= threshold and implied_low > vdot + 2
+    message = None
+    if looks_low:
+        message = (
+            f"{faster} of the last {len(paces)} runs were faster than this VDOT's "
+            f"easy pace. Two readings: either those runs are harder than they feel, "
+            f"or the estimate is too low. If a median of "
+            f"{_mmss(median)}/mi is genuinely conversational, it implies VDOT "
+            f"{implied_low:.0f}–{implied_high:.0f}, not {vdot:.1f} — a gap far larger "
+            "than the model can resolve from easy runs alone. Re-anchor with a hard "
+            "effort you actually raced."
+        )
+    return Plausibility(
+        looks_low, median, implied_low, implied_high, faster, len(paces), message
+    )
+
+
+def _mmss(seconds: float) -> str:
+    m, s = divmod(int(round(seconds)), 60)
+    return f"{m}:{s:02d}"
 
 
 def score_efforts(runs: Iterable[RunSummary]) -> list[Effort]:
