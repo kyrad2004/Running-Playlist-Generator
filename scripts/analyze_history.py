@@ -29,6 +29,9 @@ from rpg.transport import ApiError
 # who you are. Prescribing paces off a stale benchmark is an injury risk.
 STALE_AFTER_DAYS = 90
 
+# Two sensors on the same run normally land within a few bpm of each other.
+HR_CONFLICT_BPM = 5
+
 
 def report_duplicates(groups, verbose: bool) -> None:
     if not groups:
@@ -57,6 +60,18 @@ def report_duplicates(groups, verbose: bool) -> None:
         print(f"\n  … {len(groups) - 5} more (--show-duplicates for all)")
     print("\n  '?' marks a looser match worth eyeballing — one app may have")
     print("  recorded a warmup the other missed, or they may be separate runs.")
+
+    conflicts = [(g, g.heartrate_conflict) for g in groups if g.heartrate_conflict]
+    material = [(g, gap) for g, gap in conflicts if gap >= HR_CONFLICT_BPM]
+    if material:
+        print(f"\n  Heart-rate disagreements ({len(material)}):")
+        for group, gap in material:
+            readings = sorted(r.average_heartrate for r in group.runs if r.average_heartrate)
+            kept = group.primary().average_heartrate
+            print(f"    {group.date}  {' vs '.join(f'{v:.0f}' for v in readings)} bpm "
+                  f"(gap {gap:.0f}) — merge keeps {kept:.0f}")
+        print("    Two sensors on one run disagreeing this much means one is wrong.")
+        print("    Worth deciding which device you trust before HR feeds a zone calc.")
 
 
 def report_timeline(runs) -> None:
@@ -125,8 +140,33 @@ def report_recency(runs) -> None:
         print(f"\n  last run: {last} ({gap} days ago)")
 
 
+def _pearson(xs: list[float], ys: list[float]) -> float | None:
+    """Correlation coefficient, no numpy. None when it isn't defined."""
+    n = len(xs)
+    if n < 3:
+        return None
+    mx, my = sum(xs) / n, sum(ys) / n
+    dx = [x - mx for x in xs]
+    dy = [y - my for y in ys]
+    numerator = sum(a * b for a, b in zip(dx, dy))
+    denominator = (sum(a * a for a in dx) * sum(b * b for b in dy)) ** 0.5
+    return numerator / denominator if denominator else None
+
+
+def _stdev(values: list[float]) -> float:
+    n = len(values)
+    mean = sum(values) / n
+    return (sum((v - mean) ** 2 for v in values) / n) ** 0.5
+
+
 def report_cadence_model(runs) -> None:
-    """Cadence-vs-pace pairs are the calibration data for Phase 3."""
+    """Cadence-vs-pace pairs are the calibration data for Phase 3.
+
+    The question this answers is whether target cadence needs to be a function
+    of pace at all. If cadence doesn't move with pace across the range actually
+    trained, a single constant is the better model — fewer parameters fitted to
+    the same data.
+    """
     with_cadence = [r for r in runs if r.steps_per_minute and r.pace_per_mile_s]
     print("\nCadence calibration data (Phase 3)")
     print("─" * 78)
@@ -144,11 +184,32 @@ def report_cadence_model(runs) -> None:
 
     spms = [r.steps_per_minute for r in with_cadence]
     paces = [r.pace_per_mile_s for r in with_cadence]
-    print(f"\n  cadence range {min(spms):.0f}–{max(spms):.0f} spm "
-          f"across {format_pace(min(paces))}–{format_pace(max(paces))}/mi")
-    if max(paces) - min(paces) < 60:
-        print("  ⚠ These paces are too clustered to fit a slope. Treat cadence as")
-        print("    roughly constant for now, and revisit if faster runs get recorded.")
+    mean_spm = sum(spms) / len(spms)
+    spread = max(paces) - min(paces)
+
+    print(f"\n  cadence  {min(spms):.0f}–{max(spms):.0f} spm, "
+          f"mean {mean_spm:.0f}, sd {_stdev(spms):.1f}")
+    print(f"  pace     {format_pace(min(paces))}–{format_pace(max(paces))}/mi "
+          f"({spread / 60:.1f} min/mi spread)")
+
+    r = _pearson(paces, spms)
+    if r is None:
+        print("\n  Not enough points to test whether cadence tracks pace.")
+        return
+
+    print(f"  correlation (pace vs cadence)  r = {r:+.2f}")
+
+    if spread < 60:
+        print("\n  ⚠ Paces too clustered to trust the correlation either way.")
+        print("    Treat cadence as constant and revisit if the range widens.")
+    elif abs(r) < 0.4:
+        print(f"\n  → Cadence does NOT track pace across the range you train at.")
+        print(f"    Use a single target of {mean_spm:.0f} spm rather than fitting a")
+        print("    slope: one parameter, and the data doesn't support two.")
+        print(f"    Music target: {mean_spm:.0f} BPM, or {mean_spm / 2:.0f} BPM at half-time.")
+    else:
+        print(f"\n  → Cadence does track pace (r = {r:+.2f}). A linear")
+        print("    pace→cadence model is justified; fit it in Phase 3.")
 
 
 def main() -> int:

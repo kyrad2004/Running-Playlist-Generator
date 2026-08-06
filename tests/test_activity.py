@@ -100,3 +100,42 @@ def test_coverage_of_empty_list_does_not_divide_by_zero():
     cov = coverage([])
     assert cov.total_runs == 0
     assert cov.heartrate_pct == 0.0
+
+
+def test_pearson_and_stdev_on_real_cadence_data():
+    """The 10 cadence-carrying runs from a real account: cadence is flat across
+    a 1.8 min/mi pace spread, which is what makes a constant the right model."""
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    from analyze_history import _pearson, _stdev
+
+    paces = [527, 550, 553, 583, 583, 584, 591, 611, 618, 637]
+    spms = [163.0, 157.0, 156.0, 159.0, 161.0, 159.0, 162.0, 163.0, 159.0, 156.0]
+
+    r = _pearson(paces, spms)
+    assert abs(r) < 0.4, f"expected no correlation, got r={r}"
+    assert 2.0 < _stdev(spms) < 3.0
+
+
+def test_pearson_detects_a_real_relationship():
+    assert _p([1, 2, 3, 4, 5], [2, 4, 6, 8, 10]) > 0.99
+
+
+def test_pearson_needs_three_points():
+    assert _p([1, 2], [1, 2]) is None
+
+
+def test_pearson_handles_zero_variance():
+    assert _p([5, 5, 5], [1, 2, 3]) is None
+
+
+def _p(xs, ys):
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    from analyze_history import _pearson
+
+    return _pearson(xs, ys)

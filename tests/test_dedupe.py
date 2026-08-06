@@ -161,3 +161,16 @@ def test_is_generic_name_classification():
         assert is_generic_name(generic), generic
     for real in ("Malta Half Marathon", "Nike Run Club: 4K Tempo Run", "Afternoon Recovery"):
         assert not is_generic_name(real), real
+
+
+def test_heartrate_conflict_is_surfaced():
+    """Both copies recorded HR and disagree by 9 bpm — merging picks a winner
+    silently, so the disagreement has to be reported."""
+    runs = [run(1, "2026-01-02", 3.27, hr=168), run(2, "2026-01-02", 3.33, hr=177)]
+    group = find_duplicate_groups(runs)[0]
+    assert group.heartrate_conflict == 9
+
+
+def test_no_conflict_when_only_one_copy_has_heartrate():
+    runs = [run(1, "2026-02-22", 13.28), run(2, "2026-02-22", 13.27, hr=169)]
+    assert find_duplicate_groups(runs)[0].heartrate_conflict is None

@@ -152,47 +152,126 @@ matters.
 
 ---
 
-## Finding 4 — The real data is thinner than the plan assumed
+## Finding 4 — Half the activity records are duplicates
 
-Measured against a live account, 60-day window:
+Measured against a live account over 365 days: **56 run activities, 38 distinct
+runs.** Eighteen were the same run recorded twice, by Nike Run Club syncing to
+Strava while the Strava app also recorded.
 
-| | Result | Consequence |
+Deduplicating changes the numbers materially:
+
+| | As recorded | Deduplicated |
 |---|---|---|
-| Runs | **2** (need 7+) | Cold start isn't an edge case — it's the only case |
-| Heart rate | **0%** | The `has_heartrate` branch has no data to validate against |
-| Cadence | **0%** | Phase 3 cannot match music to *measured* cadence |
-| Pace | 100% | The one signal we can rely on |
+| Runs | 56 | 38 |
+| Heart rate | 41% | **58%** |
+| Cadence | 18% | **26%** |
 
-This is the profile of phone-recorded runs. Strava's mobile app captures GPS, so
-distance and pace are solid, but heart rate needs a strap or watch and running
-cadence needs a footpod or watch — neither is inferred from the phone. Unless
-the hardware changes, **these columns stay empty**, so they should be treated as
-permanently absent rather than as a gap that fills in later.
+Left in, duplicates double weekly volume, break any 80/20 easy-hard split, and
+let "best recent effort" pick whichever copy is listed first. This has to happen
+in Phase 1 ingestion, before anything reads the data.
 
-### What has to change
+`rpg.dedupe` groups same-day activities by distance and duration tolerance
+rather than equality — GPS drift and unmatched warmups mean the copies rarely
+agree exactly, with observed gaps from 0.0% to 21%. Two details that matter:
 
-**Cold start becomes the primary path, not a fallback.** Phase 2 Week 4 lists
-the data-sufficiency check and the onboarding fallback as separate items, with
-rolling VDOT as the main route. At 2 runs it's the reverse: build the onboarding
-estimate first, and treat rolling VDOT as the upgrade that switches on once
-history exists.
+- **Merge the fields, keep one record's pace.** Only null fields are filled, so
+  pace from one device is never mixed with heart rate from another.
+- **A human-typed name beats Strava's auto-generated one.** The richer copy of
+  the 2026-02-22 pair was auto-named "Morning Run"; the other was "Malta Half
+  Marathon". That label is what tells a VDOT estimate the effort was maximal, so
+  losing it would hide the single most valuable data point in the account.
 
-**The HR branch becomes untestable, not unbuildable.** It can still be written —
-it's a good design point and worth showing — but the plan's benchmark ("test
-against your own real data") can't be met for that path. Better to say so
-explicitly than to pretend it was validated.
+Anything outside a tight tolerance is flagged for review rather than merged
+silently, as is a case where both copies recorded heart rate and disagreed
+(observed: 168 vs 177 bpm on one run — one sensor is simply wrong).
 
-**Cadence has to be modeled from pace.** This is the substantive change. Phase 3
-assumed measured cadence; with none available, target cadence must be derived.
-Step rate rises with speed in a roughly linear way over normal training paces,
-so a `cadence ≈ a + b × speed` model with a user-supplied calibration point (count
-your steps for 30 seconds on one run, enter it once) is the workable version.
-Treat the model as an assumption to test on a real run, which is exactly what
-the Phase 3 benchmark already asks.
+---
 
-**Half-time matching stops being optional.** A 170 spm target has no useful pool
-of 170 BPM music — most popular music sits between 90 and 140 BPM. Matching 85
-BPM at half-time is the normal case, not the edge case the plan implies.
+## Finding 5 — Cadence does not track pace, so Phase 3 gets simpler
+
+The plan calls for "cadence-to-BPM mapping logic (including half-time/full-time
+cadence matching)", which assumes target cadence is a function of pace. Ten runs
+carry cadence, spanning 8:47–10:37/mi — a 1.8 min/mi spread, wide enough to test
+that assumption:
+
+```
+   pace/mi   spm            n = 10
+      8:47   163            mean  159.5 spm
+      9:10   157            sd      2.5 spm
+      9:13   156            r     -0.12   (pace vs cadence)
+      9:43   159            r²     0.015
+      9:43   161
+      9:44   159            pace explains 1.5% of cadence variation
+      9:51   162
+     10:11   163
+     10:18   159
+     10:37   156
+```
+
+**There is no relationship.** Over the range this athlete actually trains at,
+cadence is a constant near 160 spm with about 2.5 spm of noise. Fitting a
+pace→cadence slope would be fitting noise — the naive slope comes out at
+−0.58 spm per min/mi, which is the wrong sign and inside the error bars.
+
+So Phase 3's target is a single number, not a model:
+
+- **Target: ~160 BPM, or ~80 BPM at half-time.**
+- One parameter instead of two, no calibration step, no model to validate.
+- Revisit only if genuinely fast running (intervals, a race) gets recorded — all
+  ten points here are easy-to-moderate efforts.
+
+**Half-time matching stops being optional.** There is very little popular music
+at 160 BPM; most sits between 90 and 140. Matching at 80 BPM is the normal case,
+not the edge case the plan implies.
+
+This is a case where real data made the build smaller. The generic advice is
+"cadence rises with speed," and it does across a wide enough range — but not
+across the range this runner trains in, and the data says so clearly.
+
+---
+
+## Finding 6 — The fitness anchor is stale, and the engine has to know that
+
+The best VDOT input available is the Malta Half Marathon: 13.27 mi at 9:32/mi.
+It is also **165 days old**, and the training history around it is not flat:
+
+```
+2025-08    9 runs   38.0 mi   ████████████████████
+2025-09    4 runs   12.6 mi   ███████
+2025-10    2 runs    6.4 mi   ███
+2025-11    1 run     2.6 mi   █
+2025-12    2 runs    8.7 mi   █████
+2026-01    9 runs   35.0 mi   ██████████████████
+2026-02    6 runs   36.5 mi   ███████████████████   ← half marathon
+2026-03    1 run     1.7 mi   █
+2026-04    1 run     2.8 mi   █
+2026-05    1 run     2.3 mi   █
+2026-07    1 run     2.4 mi   █
+2026-08    1 run     1.8 mi   █
+```
+
+Two training blocks, then five months at roughly one short run per month. Last
+30 days: 2 runs, 4.2 miles.
+
+A naive "rolling VDOT from best recent effort" would read the half marathon,
+conclude half-marathon fitness, and prescribe paces accordingly — to someone who
+has run 6.5 miles in three months. That is not a rounding error; it's the kind
+of recommendation that causes injuries.
+
+**Phase 2 needs a staleness rule, not just a max over the window.** Options,
+roughly in order of effort:
+
+1. Decay the VDOT estimate with the age of the effort it came from.
+2. Require a minimum recent volume before trusting a history-derived estimate at
+   all, and fall back to onboarding when it isn't met.
+3. Weight efforts by recency when picking the "best" one.
+
+A related signal worth surfacing: recent short runs sit around 8:55–9:36/mi,
+which is at or faster than the half marathon pace of 9:32/mi. Running short
+distances at race pace with no easy volume underneath is exactly the pattern the
+80/20 rule in Phase 2 Week 5 exists to catch, so there is a real test case here
+for the engine's output — and a real answer for "would you trust what it told
+you?"
 
 ### Two fields worth exploiting
 
@@ -234,8 +313,16 @@ is a stronger interview answer than a project where nothing went wrong.
 
 **Watch out for:** the Phase 3 ranking step. With `popularity` removed and search
 capped at 10 results, the candidate pool is narrower than the plan assumed.
-Saved tracks (`GET /me/tracks`) and top tracks are likely to be the better
-sources — both are probed by `scripts/probe_spotify.py`.
+Saved tracks are the better source — the probed account has **1,501** of them,
+which is a large enough pool that BPM coverage, not catalogue size, is the
+binding constraint.
+
+**Simplified:** Phase 3's cadence mapping. Finding 5 replaces the pace→cadence
+model with a single constant, which removes the calibration step entirely.
+
+**Added:** deduplication in Phase 1 (Finding 4) and a staleness rule in Phase 2
+(Finding 6). Neither was in the original plan; both are required for the output
+to be trustworthy.
 
 ---
 

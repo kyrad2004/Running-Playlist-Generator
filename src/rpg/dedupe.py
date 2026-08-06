@@ -81,6 +81,20 @@ class DuplicateGroup:
     def high_confidence(self) -> bool:
         return self.distance_gap <= HIGH_CONFIDENCE_DISTANCE
 
+    @property
+    def heartrate_conflict(self) -> float | None:
+        """Spread in bpm when more than one copy recorded heart rate.
+
+        Two chest straps or a strap and a wrist sensor disagreeing by a few bpm
+        is normal. A wide gap means one of them is wrong, and merging silently
+        picks a winner — worth surfacing before that value feeds a zone
+        calculation.
+        """
+        readings = [r.average_heartrate for r in self.runs if r.average_heartrate]
+        if len(readings) < 2:
+            return None
+        return max(readings) - min(readings)
+
     def primary(self) -> RunSummary:
         """The copy to keep: richest first, longest as the tiebreak."""
         return max(self.runs, key=lambda r: (_richness(r), r.distance_m or 0))
